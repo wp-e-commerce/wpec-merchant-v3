@@ -53,7 +53,7 @@ class WPSC_Payment_Gateway_Paypal_Express_Checkout extends WPSC_Payment_Gateway
 		return $gateway_data;
 	}
 
-	private function get_return_url() {
+	protected function get_return_url() {
 		$location = add_query_arg( array(
 				'sessionid'                => $this->purchase_log->get( 'sessionid' ),
 				'payment_gateway'          => 'paypal-express-checkout',
@@ -64,7 +64,7 @@ class WPSC_Payment_Gateway_Paypal_Express_Checkout extends WPSC_Payment_Gateway
 		return apply_filters( 'wpsc_paypal_express_checkout_return_url', $location );
 	}
 
-	private function get_notify_url() {
+	protected function get_notify_url() {
 		$location = add_query_arg( array(
 			'payment_gateway'          => 'paypal-express-checkout',
 			'payment_gateway_callback' => 'ipn',
@@ -73,7 +73,7 @@ class WPSC_Payment_Gateway_Paypal_Express_Checkout extends WPSC_Payment_Gateway
 		return apply_filters( 'wpsc_paypal_express_checkout_notify_url', $location );
 	}
 
-	private function set_purchase_log_for_callbacks( $sessionid = false ) {
+	protected function set_purchase_log_for_callbacks( $sessionid = false ) {
 		if ( $sessionid === false )
 			$sessionid = $_REQUEST['sessionid'];
 		$purchase_log = new WPSC_Purchase_Log( $sessionid, 'sessionid' );
@@ -332,7 +332,7 @@ class WPSC_Payment_Gateway_Paypal_Express_Checkout extends WPSC_Payment_Gateway
 		<?php
 	}
 
-	private function is_currency_supported() {
+	protected function is_currency_supported() {
 		$code = parent::get_currency_code();
 		return in_array( $code, $this->gateway->get_supported_currencies() );
 	}
@@ -344,7 +344,7 @@ class WPSC_Payment_Gateway_Paypal_Express_Checkout extends WPSC_Payment_Gateway
 		return $code;
 	}
 
-	private function convert( $amt ) {
+	protected function convert( $amt ) {
 		if ( $this->is_currency_supported() )
 			return $amt;
 
