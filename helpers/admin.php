@@ -51,7 +51,7 @@ function _wpsc_filter_merchant_v3_gateway_form( $form, $gateway_id ) {
 	$output = array(
 		'name'              => $gateway->get_title(),
 		'form_fields'       => ob_get_clean(),
-		'has_submit_button' => 1,
+		'has_submit_button' => 0,
 	);
 	return $output;
 }
