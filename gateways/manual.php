@@ -13,10 +13,6 @@ class WPSC_Payment_Gateway_Manual extends WPSC_Payment_Gateway
 		$this->title = __( 'Manual Payment Gateway 3.0', 'wpsc' );
 	}
 
-	public function get_title() {
-		return $this->title;
-	}
-
 	/**
 	 * Displays the setup form
 	 *
@@ -49,10 +45,11 @@ class WPSC_Payment_Gateway_Manual extends WPSC_Payment_Gateway
 			</td>
 		</tr>
 		<?php
+		parent::setup_form();
 	}
 
 	public function process() {
-		$this->purchase_log->set( 'processed', WPSC_Purchase_Log::ORDER_RECEIVED )->save();
+		$this->purchase_log->set( 'processed', WPSC_PAYMENT_STATUS_RECEIVED )->save();
 		$this->go_to_transaction_results();
 	}
 }
