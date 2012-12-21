@@ -28,6 +28,7 @@ final class WPSC_Payment_Gateways
 	 *
 	 * @access private
 	 * @static
+	 *
 	 * @since 3.9
 	 *
 	 * @var array
@@ -59,14 +60,38 @@ final class WPSC_Payment_Gateways
 				$meta = self::$gateways[$gateway];
 			require_once( $meta['path'] );
 			$class_name = $meta['class'];
-			if ( ! class_exists( $class_name ) )
-				return new WP_Error( 'wpsc_invalid_payment_gateway', sprintf( __( 'Invalid payment gateway: Class %s does not exist.', 'wpsc' ), $class_name ) );
+			if ( ! class_exists( $class_name ) ) {
+				$error = new WP_Error( 'wpsc_invalid_payment_gateway', sprintf( __( 'Invalid payment gateway: Class %s does not exist.', 'wpsc' ), $class_name ) );
+				return $error;
+			}
 
 			self::$instances[$gateway] = new $class_name();
-			self::$instances[$gateway]->setting = new WPSC_Payment_Gateway_Setting( $gateway );
 		}
 
 		return self::$instances[$gateway];
+	}
+
+	public static function init() {
+		add_action( 'wpsc_update_payment_gateway_settings', array( 'WPSC_Payment_Gateway_Setting', 'action_update_payment_gateway_settings' ) );
+
+		if ( ! defined( 'WPSC_PAYMENT_GATEWAY_DEBUG' ) || WPSC_PAYMENT_GATEWAY_DEBUG == false )
+			add_action( 'wp_loaded', array( 'WPSC_Payment_Gateways', 'action_save_payment_gateway_cache' ), 99 );
+		else
+			WPSC_Payment_Gateways::flush_cache();
+
+		WPSC_Payment_Gateways::register_dir( WPSC_FILE_PATH . '/wpsc-payment-gateways' );
+
+		if ( isset( $_REQUEST['payment_gateway'] ) && isset( $_REQUEST['payment_gateway_callback'] ) && self::is_registered( $_REQUEST['payment_gateway'] ) )
+			add_action( 'init', array( 'WPSC_Payment_Gateways', 'action_process_callbacks' ) );
+	}
+
+	public static function action_process_callbacks() {
+		$gateway = self::get( $_REQUEST['payment_gateway'] );
+		$function_name = "callback_{$_REQUEST['payment_gateway_callback']}";
+		$callback = array( $gateway, $function_name );
+
+		if ( is_callable( $callback ) )
+			$gateway->$function_name();
 	}
 
 	/**
@@ -89,20 +114,19 @@ final class WPSC_Payment_Gateways
 	 * structure.
 	 *
 	 * All of the files inside the directory will be assumed as payment gateway modules.
-	 * If the directory has sub-folders, these sub-folders will be scanned as well, and
-	 * files with the same
-	 * name as those sub-folders will be included as payment gateway modules.
+	 * Files with the same name as those sub-folders will be included as payment
+	 * gateway modules.
 	 *
 	 * For example, if we have the following directory structure:
 	 * payment-gateways/
 	 * |-- test-gateway-1.php
 	 * |-- test-gateway-2.php
-	 * |-- test-gateway-3/
-	 *     |-- test-gateway-3.php
+	 * |-- some-folder/
+	 *     |-- class.php
 	 *     |-- functions.php
 	 *
 	 * The following files will be loaded as payment gateway modules: test-gateway-1.php,
-	 * test-gateway-2.php, test-gateway-3/test-gateway-3.php
+	 * test-gateway-2.php
 	 * See WPSC_Payment_Gateways::register_file() for file and class naming convention
 	 *
 	 * @access public
@@ -118,18 +142,20 @@ final class WPSC_Payment_Gateways
 	public static function register_dir( $dir, $main_file = '' ) {
 		$dir = trailingslashit( $dir );
 		$main_file = basename( $dir ) . '.php';
-		if ( file_exists( $dir . $main_file ) )
-			return self::register_file( $dir . $main_file );
 
 		// scan files in dir
 		$files = scandir( $dir );
 
+		if ( in_array( $main_file, $files ) )
+			return self::register_file( $dir . $main_file );
+
 		foreach ( $files as $file ) {
-			if ( in_array( $file, array( '.', '..' ) ) )
+			$path = $dir . $file;
+
+			if ( pathinfo( $path, PATHINFO_EXTENSION ) != 'php' || in_array( $file, array( '.', '..' ) ) || is_dir( $path ) )
 				continue;
 
-			$path = $dir . $file;
-			$return = is_dir( $path ) ? self::register_dir( $path ) : self::register_file( $path );
+			$return = self::register_file( $path );
 
 			if ( is_wp_error( $return ) )
 				return $return;
@@ -206,6 +232,10 @@ final class WPSC_Payment_Gateways
 			update_option( 'wpsc_payment_gateway_cache', self::$gateways );
 	}
 
+	public function flush_cache() {
+		delete_option( 'wpsc_payment_gateway_cache' );
+	}
+
 	/**
 	 * Gets metadata of a certain payment gateway. This is better than calling WPSC_Payment_Gateways->get( $gateway_name )->get_title()
 	 * and the likes of it, since it doesn't require the gateway itself to be loaded.
@@ -274,17 +304,21 @@ abstract class WPSC_Payment_Gateway
 	public $currency_code;
 
 	/**
-	 * Return the title of the payment gateway. This method must be overridden by subclasses.
+	 * Return the title of the payment gateway. For this to work, $this->title must
+	 * be set already.
+	 *
 	 * It is recommended that the payment gateway title be properly localized using __()
 	 *
-	 * @abstract
 	 * @access public
 	 * @since 3.9
 	 * @see __()
 	 *
 	 * @return string
 	 */
-	abstract public function get_title();
+	public function get_title() {
+		$title = empty( $this->title ) ? '' : $this->title;
+		return apply_filters( 'wpsc_payment_gateway_title', $title );
+	}
 
 	/**
 	 * Display the payment gateway settings form as seen in WP e-Commerce Settings area.
@@ -296,7 +330,45 @@ abstract class WPSC_Payment_Gateway
 	 *
 	 * @return void
 	 */
-	abstract public function setup_form();
+	public function setup_form() {
+		$checkout_field_types = array(
+			'billing' => __( 'Billing Fields', 'wpsc' ),
+			'shipping' => __( 'Shipping Fields', 'wpsc' ),
+		);
+
+		$fields = array(
+			'firstname' => __( 'First Name', 'wpsc' ),
+			'lastname'  => __( 'Last Name', 'wpsc' ),
+			'address'   => __( 'Address', 'wpsc' ),
+			'city'      => __( 'City', 'wpsc' ),
+			'state'     => __( 'State', 'wpsc' ),
+			'country'   => __( 'Country', 'wpsc' ),
+			'postcode'  => __( 'Postal Code', 'wpsc' ),
+		);
+		$checkout_form = WPSC_Checkout_Form::get();
+		foreach ( $checkout_field_types as $field_type => $title ): ?>
+			<tr>
+				<td colspan="2">
+					<h4><?php echo esc_html( $title ); ?></h4>
+				</td>
+			</tr>
+			<?php foreach ( $fields as $field_name => $field_title ):
+				$unique_name = $field_type . $field_name;
+				$selected_id = $this->setting->get( "checkout_field_{$unique_name}", $checkout_form->get_field_id_by_unique_name( $unique_name ) );
+			?>
+				<tr>
+					<td>
+						<label for="manual-form-<?php echo esc_attr( $unique_name ); ?>"><?php echo esc_html( $field_title ); ?></label>
+					</td>
+					<td>
+						<select name="<?php echo $this->setting->get_field_name( "checkout_field_{$unique_name}" ); ?>" id="manual-form-<?php echo esc_attr( $unique_name ); ?>">
+							<?php $checkout_form->field_drop_down_options( $selected_id ); ?>
+						</select>
+					</td>
+				</tr>
+			<?php endforeach;
+		endforeach;
+	}
 
 	/**
 	 * Process and send payment details to payment gateways
@@ -323,7 +395,7 @@ abstract class WPSC_Payment_Gateway
 
 	public function set_purchase_log( &$purchase_log ) {
 		$this->purchase_log = &$purchase_log;
-		$this->checkout_data = new WPSC_Checkout_Form_Data( $purchase_log->get( 'id ' ) );
+		$this->checkout_data = new WPSC_Checkout_Form_Data( $purchase_log->get( 'id' ) );
 	}
 
 	public function get_currency_code() {
@@ -381,6 +453,7 @@ abstract class WPSC_Payment_Gateway
 	 * @return WPSC_Payment_Gateway
 	 */
 	public function __construct() {
+		$this->setting = new WPSC_Payment_Gateway_Setting( get_class( $this ) );
 	}
 }
 
@@ -429,13 +502,11 @@ class WPSC_Payment_Gateway_Setting
 	 * @since 3.9
 	 */
 	public static function action_update_payment_gateway_settings() {
-		if ( empty( $_POST['wpsc_payment_gateway_settings'] ) )
-			return;
-
-		foreach ( $_POST['wpsc_payment_gateway_settings'] as $gateway_name => $new_settings ) {
-			$settings = new WPSC_Payment_Gateway_Setting( $gateway_name );
-			$settings->merge( $new_settings );
-		}
+		if ( ! empty( $_POST['wpsc_payment_gateway_settings'] ) )
+			foreach ( $_POST['wpsc_payment_gateway_settings'] as $gateway_name => $new_settings ) {
+				$settings = new WPSC_Payment_Gateway_Setting( $gateway_name );
+				$settings->merge( $new_settings );
+			}
 	}
 
 	/**
@@ -446,8 +517,10 @@ class WPSC_Payment_Gateway_Setting
 	 * @param string $gateway_name Name of the gateway
 	 * @return WPSC_Payment_Gateway
 	 */
-	public function __construct( $gateway_name ) {
-		$this->gateway_name = str_replace( array( ' ', '-' ), '_', $gateway_name );
+	public function __construct( $gateway_name_or_class ) {
+		$name = str_replace( 'wpsc_payment_gateway_', '', strtolower( $gateway_name_or_class ) );
+		$name = str_replace( array( ' ', '-' ), '_', $name );
+		$this->gateway_name = $name;
 		$this->option_name = 'wpsc_payment_gateway_' . $this->gateway_name;
 	}
 
@@ -511,7 +584,7 @@ class WPSC_Payment_Gateway_Setting
 	 * Returns the field name of the setting on payment gateway setup form
 	 *
 	 * @access public
-	 * @param string $setting Setting name
+	 * @param string $setting Setting names
 	 * @return string
 	 * @since 3.9
 	 */
@@ -532,7 +605,4 @@ class WPSC_Payment_Gateway_Setting
 	}
 }
 
-WPSC_Payment_Gateways::register_dir( WPSC_MERCHANT_V3_PATH . '/gateways' );
-
-add_action( 'wpsc_submit_gateway_options', array( 'WPSC_Payment_Gateway_Setting', 'action_update_payment_gateway_settings' ) );
-add_action( 'wp_loaded', array( 'WPSC_Payment_Gateways', 'action_save_payment_gateway_cache' ), 99 );
+WPSC_Payment_Gateways::init();
